@@ -1,0 +1,33 @@
+**Task — Company product rules for non-reimbursable items**
+
+**What we want**
+
+A company admin can create **product rules** in the admin dashboard. Every invoice scanned by that company is checked against those rules. Items that break a rule are flagged as **not reimbursable** — they stay visible to the app user with a warning, and the value sent to the ERP drops by their amount.
+
+**What needs to be done**
+
+**1. Admin dashboard — rule CRUD.** New screen where a company admin can create, list, edit, deactivate and delete product rules. A rule has a **name** (shown to the app user in the warning, e.g. "Alcoholic drinks"), a **match type** (NCM prefix or Keyword in product name), a **match value** (e.g. 2203, or cerveja), plus optional description and active/inactive status. One rule = one criterion. An admin only sees and edits their own company's rules.
+
+**2. API — evaluate the invoice.** When the API receives an invoice from the app, compare every product against the company's active rules. *NCM prefix*: the product's NCM starts with the rule value. *Keyword*: the rule value appears anywhere in the product name, ignoring case and accents. A product is blocked if it matches **any** active rule. Run this in **two places** — on the preview, so the user sees the warning before saving, and again on save, reading the rules fresh from the database.
+
+**3. Save the invoice with the flags.** The user can still save. Store on each product whether it is blocked and which rule blocked it, keeping a copy of the rule name so the warning survives the rule being renamed or deleted. Store on the invoice a new **reimbursable amount** = invoice amount − blocked items. **Do not change the invoice amount** — it is the fiscal value of the document. Blocked state is frozen at save time: changing a rule later does not re-evaluate invoices already saved.
+
+**4. App — show the warning.** Blocked items still appear in the list, marked, with the rule name and a message that the item will not be reimbursed. Show both the invoice total and the reimbursable total. Saving stays allowed.
+
+**5. ERP — send the adjusted value.** Sending to the ERP uses the **reimbursable amount**. If every item is blocked (reimbursable = 0), refuse the send with a clear error instead of creating a zero-value entry in the ERP. Inside a folder send, skip that invoice and keep sending the rest.
+
+**6. Budget.** The employee's monthly budget consumes the **reimbursable amount**, not the full invoice value. Existing invoices must keep counting their full value, so their reimbursable amount starts equal to their amount.
+
+**Done when**
+
+- An admin can manage product rules and only sees their own company's.
+
+- An invoice with a matching product comes back from preview and from save with that item flagged and the reimbursable amount calculated.
+
+- Rules from one company never affect another company's invoices.
+
+- The app shows the blocked item with its warning and both totals.
+
+- The ERP receives the reimbursable amount; a fully blocked invoice is refused.
+
+- Existing budget and dashboard numbers do not change.

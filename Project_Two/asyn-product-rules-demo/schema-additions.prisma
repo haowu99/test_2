@@ -1,0 +1,170 @@
+// ============================================================
+// PRODUCT RULES FEATURE — Prisma schema additions
+// ============================================================
+//
+// IMPORTANT: I do not have the real leap-api Prisma schema source.
+// Field/model names below for EXISTING tables (Company, Invoice,
+// InvoiceItem) are ASSUMPTIONS based only on the naming style
+// mentioned in the ASYN engineering overview ("companies, plans,
+// employees, sessions, invoices, categories, folders, files,
+// feedback, and ERP records"). Before applying this migration,
+// these assumed names must be checked against the real schema.prisma
+// and adjusted to match:
+//
+//   - Company            -> assumed model name for the company table
+//   - Invoice            -> assumed model name for the invoice table
+//   - InvoiceItem        -> assumed model name for the per-product line
+//                           on an invoice (the thing that has a name/
+//                           description and an NCM code)
+//   - Invoice.amount     -> assumed field name for the invoice's
+//                           original fiscal total (must NOT be
+//                           renamed or reused — see NOTES.md)
+//   - InvoiceItem.ncm    -> assumed field name for the product's NCM
+//                           tax code
+//   - InvoiceItem.description (or .name) -> assumed field for the
+//                           product's description, used for keyword
+//                           matching
+//
+// Everything below marked "// NEW" is new. Everything marked
+// "// EXISTING (assumed)" is what I believe already exists and is
+// shown only for context — do not actually add it again.
+
+// ------------------------------------------------------------
+// NEW: the rule itself
+// ------------------------------------------------------------
+//
+// UPDATED (per product feedback, 2026-09-10): a rule now covers a LIST
+// of match values, not one. Reason: a real category like "alcohol" or
+// "tobacco" maps to several NCM codes in Brazil's official tax
+// classification (beer, wine, spirits are different codes under
+// chapter 22, for example) — the product owner does not want a
+// company admin to have to look up and manually add every individual
+// code as a separate rule. One rule = one CATEGORY, backed by a list
+// of codes/keywords, any of which can trigger a match.
+//
+// OPEN QUESTION FOR THE TEAM: ASYN_Overview.docx says the database is
+// MySQL. Prisma's native `String[]` list type is only supported on
+// PostgreSQL/CockroachDB, NOT MySQL — so storing a list here needs one
+// of two real approaches, and I have not been told which fits the
+// existing project conventions better:
+//
+//   (a) A `Json` column (`matchValues Json`) — simplest, matches how
+//       this demo's in-memory repository already treats it (a plain
+//       array). Downside: the database can't efficiently query
+//       "which rules contain code X" — you'd have to load rows and
+//       filter in application code.
+//
+//   (b) A separate child table, e.g. `ProductRuleValue { id, ruleId,
+//       value }` with a foreign key back to ProductRule. More
+//       relational, indexable, and queryable — closer to how the rest
+//       of this schema already models one-to-many relationships
+//       (see InvoiceItem below). More migration/query code to write.
+//
+// This demo's in-memory repository stores matchValues as a plain JS
+// array either way, so the choice below doesn't affect anything
+// upstream of the repository layer — only `productRuleRepository.js`
+// would change. Sketched as (a) below since it's the simpler default;
+// flag this as a real decision to confirm, not a settled one.
+enum ProductRuleMatchType {
+  NCM_PREFIX
+  KEYWORD
+}
+
+model ProductRule {
+  id          String               @id @default(cuid())
+  companyId   String
+  name        String               // shown to the app user in the warning
+  matchType   ProductRuleMatchType
+  matchValues Json                 // array of strings, e.g. ["2203","2204","2208"] or ["cerveja","vinho"] — see OPEN QUESTION above
+  description String?
+  active      Boolean              @default(true)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  company     Company              @relation(fields: [companyId], references: [id])
+
+  // A rule name/description is free text set by the company admin,
+  // not a source of truth for anything besides that company's own
+  // matching + the warning text — no other table should ever join
+  // against this table to *display* historical results (see
+  // InvoiceItem.blockedByRuleName below for why).
+
+  @@index([companyId, active])
+}
+
+// ------------------------------------------------------------
+// EXISTING (assumed) — Company
+// ------------------------------------------------------------
+// model Company {
+//   id    String @id @default(cuid())
+//   ...
+//   productRules ProductRule[]   // NEW: add this back-relation
+// }
+
+// ------------------------------------------------------------
+// EXISTING (assumed) — Invoice
+// ------------------------------------------------------------
+// model Invoice {
+//   id     String  @id @default(cuid())
+//   amount Decimal                 // fiscal value — NEVER modified by this feature
+//   ...
+//   reimbursableAmount Decimal     // NEW — see below
+// }
+
+// NEW field to add to the existing Invoice model:
+//
+//   reimbursableAmount Decimal
+//
+// Semantics:
+//   - amount:              the invoice's fiscal value. Comes from SEFAZ
+//                          data. This feature must NEVER write to it.
+//   - reimbursableAmount:  amount minus the sum of blocked items'
+//                          valorTotal, computed and frozen at save time.
+//   - For every invoice that exists BEFORE this migration ships,
+//     reimbursableAmount must be backfilled to equal amount (see
+//     migration.sql). This keeps existing budget totals unchanged,
+//     per the task's "Done when" checklist.
+
+// ------------------------------------------------------------
+// EXISTING (assumed) — InvoiceItem (per-product line on an invoice)
+// ------------------------------------------------------------
+// model InvoiceItem {
+//   id          String  @id @default(cuid())
+//   invoiceId   String
+//   description String
+//   ncm         String?
+//   valorTotal  Decimal
+//   ...
+//   blocked           Boolean  // NEW
+//   blockedByRuleId   String?  // NEW
+//   blockedByRuleName String?  // NEW
+// }
+
+// NEW fields to add to the existing InvoiceItem model:
+//
+//   blocked           Boolean  @default(false)
+//   blockedByRuleId   String?
+//   blockedByRuleName String?
+//
+// Semantics:
+//   - blocked: true if this item matched an active rule AT SAVE TIME.
+//     Never re-evaluated after save (task requirement: "changing a
+//     rule later does not re-evaluate invoices already saved").
+//   - blockedByRuleId: kept for analytics/audit only (e.g. "which
+//     rule causes the most blocks"). It is a nullable, non-cascading
+//     reference — if the rule is later deleted, this can become an
+//     orphaned id or be set to null; either way it must NEVER be used
+//     to look up display text at read time.
+//   - blockedByRuleName: the actual snapshot used for display. Copied
+//     from ProductRule.name at the moment of evaluation. This is what
+//     makes the warning survive the rule being renamed or deleted, as
+//     required by the task.
+//
+// If InvoiceItem.blockedByRuleId references ProductRule, the relation
+// must be optional and use onDelete: SetNull (or no defined relation
+// at the Prisma level at all, just a plain unindexed string column) —
+// NOT onDelete: Cascade or Restrict, since deleting a rule must not
+// delete or block deletion of historical invoice items.
+//
+// Example relation if a typed FK is preferred:
+//   blockedByRule ProductRule? @relation(fields: [blockedByRuleId], references: [id], onDelete: SetNull)

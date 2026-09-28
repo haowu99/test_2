@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Asyn — Invoice preview</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#1E2422;
+    --ink-soft:#5B655F;
+    --paper:#F5F6F2;
+    --paper-raised:#FFFFFF;
+    --line:#DBD8CE;
+    --brand:#12403F;
+    --brand-soft:#E4ECE9;
+    --warn:#B8862F;
+    --warn-soft:#FBF1DD;
+    --danger:#A23B34;
+    --danger-soft:#F6E7E5;
+  }
+  html,body{ background:#E9E6DC; }
+  body{ color:var(--ink); font-family:'IBM Plex Sans',sans-serif; }
+  .font-display{ font-family:'Space Grotesk',sans-serif; }
+  .font-mono{ font-family:'IBM Plex Mono',monospace; }
+
+  .phone{
+    max-width:390px;
+    margin:0 auto;
+    min-height:100vh;
+    background:var(--paper);
+    position:relative;
+    box-shadow:0 0 60px rgba(0,0,0,0.12);
+  }
+
+  /* Same width/centering as .phone, WITHOUT min-height:100vh — this is
+     used inside the fixed bottom bar. Reusing .phone there was the bug:
+     the fixed bar's inner content inherited min-height:100vh too, so it
+     rendered as a near-full-screen white box that visually covered the
+     item list behind it, even though the items were rendering correctly
+     in the DOM the whole time. */
+  .phone-content{
+    max-width:390px;
+    margin:0 auto;
+  }
+
+  .scanline{
+    background-image: repeating-linear-gradient(90deg, var(--line) 0 6px, transparent 6px 12px);
+    height:1px;
+  }
+
+  @keyframes rise{
+    from{ opacity:0; transform:translateY(8px); }
+    to{ opacity:1; transform:translateY(0); }
+  }
+  .rise{ animation:rise .3s ease-out both; }
+
+  @keyframes slideDown{
+    from{ opacity:0; transform:translateY(-6px); }
+    to{ opacity:1; transform:translateY(0); }
+  }
+  .slide-down{ animation:slideDown .25s ease-out both; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useEffect, useMemo, useState } = React;
+
+// This prototype talks to the REAL backend built in Steps 2–3 (src/server.js).
+// Start it first with `npm run dev` in the project root, then open this file.
+const API_BASE = "http://localhost:3000";
+const COMPANY_ID = "company-demo"; // matches the seed rule created in server.js
+const EMPLOYEE_ID = "emp-demo";
+
+// This is the "scanned invoice" payload — standing in for what a real NFC-e
+// scan would produce. Sent to /preview on load, then to /save on click.
+const SCANNED_INVOICE = {
+  employeeId: EMPLOYEE_ID,
+  amount: 75,
+  items: [
+    { id: "i1", description: "Arroz Tipo 1 5kg", ncm: "1006.30.00", valorTotal: 20 },
+    { id: "i2", description: "Cerveja Brahma 350ml", ncm: "2203.00.00", valorTotal: 30 },
+    { id: "i3", description: "Refrigerante Guaraná 2L", ncm: "2202.10.00", valorTotal: 10 },
+    { id: "i4", description: "Cigarro Marlboro", ncm: "2402.20.00", valorTotal: 15 },
+  ],
+};
+
+function currency(v) {
+  return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function BackIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M15 18l-6-6 6-6" />
+    </svg>
+  );
+}
+function WarnIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+      <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+    </svg>
+  );
+}
+function CheckIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+
+function ItemRow({ item }) {
+  return (
+    <div className="rise">
+      <div className="flex items-start justify-between gap-3 py-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-[14px] font-medium leading-snug">{item.description}</p>
+          <p className="font-mono text-[11px] mt-0.5" style={{ color: "var(--ink-soft)" }}>NCM {item.ncm}</p>
+        </div>
+        <p className="font-mono text-[14px] shrink-0 pt-0.5" style={{ color: item.blocked ? "var(--ink-soft)" : "var(--ink)", textDecoration: item.blocked ? "line-through" : "none" }}>
+          {currency(item.valorTotal)}
+        </p>
+      </div>
+      {item.blocked && (
+        <div className="flex items-start gap-2 rounded-lg px-3 py-2.5 mb-3 -mt-1" style={{ background: "var(--danger-soft)", color: "var(--danger)" }}>
+          <span className="mt-0.5 shrink-0"><WarnIcon /></span>
+          <p className="text-[12.5px] leading-snug">
+            <span className="font-semibold">Not reimbursed</span> — blocked by your company's "{item.blockedByRuleName}" policy.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function App() {
+  const [items, setItems] = useState([]);
+  const [invoiceTotal, setInvoiceTotal] = useState(0);
+  const [reimbursableTotal, setReimbursableTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [connectionError, setConnectionError] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  async function loadPreview() {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/app/invoices/preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-company-id": COMPANY_ID },
+        body: JSON.stringify(SCANNED_INVOICE),
+      });
+      if (!res.ok) throw new Error("request failed");
+      const body = await res.json();
+      setItems(body.data.items);
+      setInvoiceTotal(body.data.amount);
+      setReimbursableTotal(body.data.reimbursableAmount);
+      setConnectionError(false);
+    } catch (err) {
+      setConnectionError(true);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadPreview();
+  }, []);
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/app/invoices/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-company-id": COMPANY_ID },
+        body: JSON.stringify(SCANNED_INVOICE),
+      });
+      if (!res.ok) throw new Error("save failed");
+      // Save re-evaluates rules fresh on the server (per the task's design) —
+      // reflect whatever it actually persisted, not the earlier preview.
+      const body = await res.json();
+      setItems(body.data.items);
+      setInvoiceTotal(body.data.amount);
+      setReimbursableTotal(body.data.reimbursableAmount);
+      setSaved(true);
+    } catch (err) {
+      setConnectionError(true);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const blockedCount = items.filter((i) => i.blocked).length;
+  const hasBlocked = blockedCount > 0;
+
+  if (loading) {
+    return (
+      <div className="phone flex items-center justify-center" style={{ minHeight: "100vh" }}>
+        <p className="text-[13px]" style={{ color: "var(--ink-soft)" }}>Loading invoice preview…</p>
+      </div>
+    );
+  }
+
+  if (connectionError) {
+    return (
+      <div className="phone flex items-center justify-center px-6" style={{ minHeight: "100vh" }}>
+        <div className="text-center">
+          <p className="text-[14px] font-semibold mb-1.5" style={{ color: "var(--danger)" }}>Can't reach the API</p>
+          <p className="text-[13px]" style={{ color: "var(--ink-soft)" }}>
+            Run <span className="font-mono">npm run dev</span> in the project folder at {API_BASE}, then reload this page.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="phone flex flex-col">
+      {/* App bar */}
+      <div className="sticky top-0 z-20 flex items-center gap-3 px-4 pt-5 pb-3" style={{ background: "var(--paper)" }}>
+        <button className="w-8 h-8 flex items-center justify-center rounded-full" style={{ color: "var(--ink)" }} aria-label="Back">
+          <BackIcon />
+        </button>
+        <div className="min-w-0">
+          <p className="text-[11px] font-mono uppercase tracking-widest" style={{ color: "var(--ink-soft)" }}>NFC-e · scanned just now</p>
+          <h1 className="font-display font-semibold text-[16px] truncate">Supermercado Bom Preço</h1>
+        </div>
+      </div>
+
+      <div className="scanline mx-4" />
+
+      {/* Warning banner if anything blocked */}
+      {hasBlocked && (
+        <div className="slide-down mx-4 mt-3 flex items-center gap-2.5 rounded-lg px-3.5 py-3" style={{ background: "var(--warn-soft)", border: "1px solid #B8862F33" }}>
+          <span style={{ color: "var(--warn)" }}><WarnIcon /></span>
+          <p className="text-[12.5px] font-medium" style={{ color: "#8A6620" }}>
+            {blockedCount} item{blockedCount > 1 ? "s" : ""} on this receipt won't be reimbursed.
+          </p>
+        </div>
+      )}
+
+      {/* Item list */}
+      <div className="flex-1 px-4 pt-4 pb-40">
+        <p className="text-[11px] font-mono uppercase tracking-widest mb-1" style={{ color: "var(--ink-soft)" }}>
+          {items.length} items
+        </p>
+        <div className="divide-y" style={{ borderColor: "var(--line)" }}>
+          {items.map((item) => (
+            <div key={item.id} className="border-b last:border-b-0" style={{ borderColor: "var(--line)" }}>
+              <ItemRow item={item} />
+            </div>
+          ))}
+        </div>
+
+        <label className="flex items-center justify-between mt-6 rounded-lg px-3.5 py-3" style={{ background: "var(--paper-raised)", border: "1px solid var(--line)" }}>
+          <span className="text-[13.5px] font-medium">Add to file</span>
+          <span className="text-[13px] font-mono px-2 py-1 rounded" style={{ color: "var(--ink-soft)", background: "var(--paper)" }}>Gastos Agosto</span>
+        </label>
+      </div>
+
+      {/* Sticky summary + save */}
+      <div className="fixed bottom-0 left-0 right-0">
+        <div className="phone-content px-4 pb-5 pt-4" style={{ background: "var(--paper-raised)", borderTop: "1px solid var(--line)", boxShadow: "0 -8px 24px -8px rgba(18,64,63,0.08)" }}>
+          <div className="flex items-end justify-between mb-4">
+            <div>
+              <p className="text-[11px] uppercase tracking-wide" style={{ color: "var(--ink-soft)" }}>Invoice total</p>
+              <p className="font-mono text-[15px] mt-0.5" style={{ color: hasBlocked ? "var(--ink-soft)" : "var(--ink)", textDecoration: hasBlocked ? "line-through" : "none" }}>
+                {currency(invoiceTotal)}
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="text-[11px] uppercase tracking-wide" style={{ color: "var(--brand)" }}>Reimbursable</p>
+              <p className="font-display font-semibold text-[22px] mt-0.5" style={{ color: "var(--brand)" }}>
+                {currency(reimbursableTotal)}
+              </p>
+            </div>
+          </div>
+
+          {saved ? (
+            <div className="w-full flex items-center justify-center gap-2 rounded-lg py-3.5" style={{ background: "var(--brand-soft)", color: "var(--brand)" }}>
+              <CheckIcon />
+              <span className="text-[14px] font-semibold">Invoice saved</span>
+            </div>
+          ) : (
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="w-full rounded-lg py-3.5 text-[14px] font-semibold text-white disabled:opacity-60"
+              style={{ background: "var(--brand)" }}
+            >
+              {saving ? "Saving…" : "Save invoice"}
+            </button>
+          )}
+          {hasBlocked && !saved && (
+            <p className="text-[11.5px] text-center mt-2.5" style={{ color: "var(--ink-soft)" }}>
+              You can still save — blocked items just won't be sent for reimbursement.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

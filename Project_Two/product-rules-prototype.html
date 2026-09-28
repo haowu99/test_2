@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Asyn Admin — Product Rules</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#1E2422;
+    --ink-soft:#5B655F;
+    --paper:#F5F6F2;
+    --paper-raised:#FFFFFF;
+    --line:#DBD8CE;
+    --brand:#12403F;
+    --brand-soft:#E4ECE9;
+    --stamp-active:#B8862F;
+    --stamp-active-bg:#FBF1DD;
+    --stamp-inactive:#8C8578;
+    --stamp-inactive-bg:#EFEDE7;
+    --danger:#A23B34;
+    --danger-soft:#F6E7E5;
+  }
+  body{ background:var(--paper); color:var(--ink); font-family:'IBM Plex Sans',sans-serif; }
+  .font-display{ font-family:'Space Grotesk',sans-serif; }
+  .font-mono{ font-family:'IBM Plex Mono',monospace; }
+
+  .stub{
+    position:relative;
+    background:var(--paper-raised);
+    border:1px solid var(--line);
+    border-radius:10px;
+  }
+  .stub::before{
+    content:"";
+    position:absolute;
+    left:0; right:0; top:0;
+    height:0;
+    border-top:1.5px dashed var(--line);
+    top:64px;
+  }
+  .stub.no-perf::before{ display:none; }
+
+  .stamp{
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    padding:3px 10px 3px 8px;
+    border-radius:999px;
+    font-size:11px;
+    font-weight:600;
+    letter-spacing:.04em;
+    text-transform:uppercase;
+    transform:rotate(-2deg);
+  }
+
+  @keyframes rise{
+    from{ opacity:0; transform:translateY(6px); }
+    to{ opacity:1; transform:translateY(0); }
+  }
+  .rise{ animation:rise .28s ease-out both; }
+
+  ::selection{ background:var(--brand-soft); }
+
+  .scanline{
+    background-image: repeating-linear-gradient(90deg, var(--line) 0 6px, transparent 6px 12px);
+    height:1px;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useMemo } = React;
+
+// This prototype talks to the REAL backend built in Steps 2–3 (src/server.js).
+// Start it first with `npm run dev` in the project root, then open this file.
+const API_BASE = "http://localhost:3000";
+const COMPANY_ID = "company-demo"; // matches the seed rule created in server.js
+
+const MATCH_LABEL = { NCM_PREFIX: "NCM prefix", KEYWORD: "Keyword" };
+
+function Stamp({ active }) {
+  return (
+    <span
+      className="stamp"
+      style={{
+        color: active ? "var(--stamp-active)" : "var(--stamp-inactive)",
+        background: active ? "var(--stamp-active-bg)" : "var(--stamp-inactive-bg)",
+        border: `1px solid ${active ? "var(--stamp-active)" : "var(--stamp-inactive)"}33`,
+      }}
+    >
+      <span style={{ width: 6, height: 6, borderRadius: 999, background: active ? "var(--stamp-active)" : "var(--stamp-inactive)" }} />
+      {active ? "Active" : "Inactive"}
+    </span>
+  );
+}
+
+function MatchTypeBadge({ type }) {
+  const isNcm = type === "NCM_PREFIX";
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium font-mono uppercase tracking-wide"
+      style={{
+        color: "var(--brand)",
+        background: "var(--brand-soft)",
+      }}
+    >
+      {isNcm ? "NCM" : "KW"} · {MATCH_LABEL[type]}
+    </span>
+  );
+}
+
+function RuleForm({ initial, onCancel, onSave, serverError }) {
+  const [name, setName] = useState(initial?.name ?? "");
+  const [matchType, setMatchType] = useState(initial?.matchType ?? "KEYWORD");
+  const [matchValuesText, setMatchValuesText] = useState((initial?.matchValues ?? []).join(", "));
+  const [description, setDescription] = useState(initial?.description ?? "");
+  const [active, setActive] = useState(initial?.active ?? true);
+  const [error, setError] = useState("");
+
+  function parseMatchValues() {
+    return matchValuesText
+      .split(/[,\n]/)
+      .map((v) => v.trim())
+      .filter((v) => v.length > 0);
+  }
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!name.trim()) return setError("Give this rule a name — it's what the employee sees in the warning.");
+    const matchValues = parseMatchValues();
+    if (matchValues.length === 0) {
+      return setError(matchType === "NCM_PREFIX" ? "Enter at least one NCM prefix, e.g. 2203, 2204." : "Enter at least one keyword, e.g. cerveja, vinho.");
+    }
+    setError("");
+    onSave({ id: initial?.id, name: name.trim(), matchType, matchValues, description: description.trim(), active });
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "rgba(30,36,34,0.35)" }}>
+      <form onSubmit={handleSubmit} className="stub no-perf rise w-full max-w-[440px] p-6 shadow-xl" style={{ boxShadow: "0 20px 45px -12px rgba(18,64,63,0.25)" }}>
+        <div className="flex items-start justify-between mb-5">
+          <div>
+            <p className="text-[11px] font-mono uppercase tracking-widest" style={{ color: "var(--ink-soft)" }}>
+              {initial ? "Edit rule" : "New rule"}
+            </p>
+            <h2 className="font-display text-xl font-semibold mt-0.5">{initial ? initial.name : "Untitled rule"}</h2>
+          </div>
+          <button type="button" onClick={onCancel} className="text-xl leading-none px-1" style={{ color: "var(--ink-soft)" }} aria-label="Close">×</button>
+        </div>
+
+        <label className="block mb-4">
+          <span className="text-[13px] font-medium block mb-1.5">Rule name</span>
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Alcoholic drinks"
+            className="w-full rounded-md px-3 py-2 text-[14px] outline-none focus:ring-2"
+            style={{ border: "1px solid var(--line)", background: "var(--paper)" }}
+          />
+          <span className="text-[12px] block mt-1" style={{ color: "var(--ink-soft)" }}>Shown to the employee in the "not reimbursable" warning.</span>
+        </label>
+
+        <label className="block mb-4">
+          <span className="text-[13px] font-medium block mb-1.5">Match type</span>
+          <select
+            value={matchType}
+            onChange={(e) => setMatchType(e.target.value)}
+            className="w-full rounded-md px-3 py-2 text-[14px] outline-none"
+            style={{ border: "1px solid var(--line)", background: "var(--paper)" }}
+          >
+            <option value="KEYWORD">Keyword</option>
+            <option value="NCM_PREFIX">NCM prefix</option>
+          </select>
+        </label>
+
+        <label className="block mb-4">
+          <span className="text-[13px] font-medium block mb-1.5">
+            Match values <span style={{ color: "var(--ink-soft)", fontWeight: 400 }}>(one or more, comma-separated)</span>
+          </span>
+          <textarea
+            value={matchValuesText}
+            onChange={(e) => setMatchValuesText(e.target.value)}
+            rows={2}
+            placeholder={matchType === "NCM_PREFIX" ? "2203, 2204, 2205, 2206, 2208" : "cerveja, vinho, uísque"}
+            className="w-full rounded-md px-3 py-2 text-[14px] font-mono outline-none resize-none"
+            style={{ border: "1px solid var(--line)", background: "var(--paper)" }}
+          />
+          <span className="text-[12px] block mt-1" style={{ color: "var(--ink-soft)" }}>
+            A product is blocked if it matches ANY value in this list — e.g. "Alcohol" can cover every beverage NCM code at once.
+          </span>
+        </label>
+
+        <label className="block mb-5">
+          <span className="text-[13px] font-medium block mb-1.5">Description <span style={{ color: "var(--ink-soft)", fontWeight: 400 }}>(optional)</span></span>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={2}
+            placeholder="Internal note for other admins — not shown to employees"
+            className="w-full rounded-md px-3 py-2 text-[13px] outline-none resize-none"
+            style={{ border: "1px solid var(--line)", background: "var(--paper)" }}
+          />
+        </label>
+
+        <label className="flex items-center gap-2.5 mb-5 cursor-pointer select-none w-fit">
+          <span className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors" style={{ background: active ? "var(--brand)" : "var(--line)" }} onClick={() => setActive((a) => !a)}>
+            <span className="inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform" style={{ transform: active ? "translateX(18px)" : "translateX(3px)" }} />
+          </span>
+          <span className="text-[13px] font-medium">{active ? "Active — applied to new invoices immediately" : "Inactive — saved, but not enforced"}</span>
+        </label>
+
+        {(error || serverError) && (
+          <p className="text-[13px] mb-4 px-3 py-2 rounded-md" style={{ background: "var(--danger-soft)", color: "var(--danger)" }}>{error || serverError}</p>
+        )}
+
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button type="button" onClick={onCancel} className="text-[13px] font-medium px-4 py-2 rounded-md" style={{ color: "var(--ink-soft)" }}>Cancel</button>
+          <button type="submit" className="text-[13px] font-semibold px-4 py-2 rounded-md text-white" style={{ background: "var(--brand)" }}>
+            {initial ? "Save changes" : "Create rule"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function ConfirmDelete({ rule, onCancel, onConfirm, serverError }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "rgba(30,36,34,0.35)" }}>
+      <div className="stub no-perf rise w-full max-w-[380px] p-6">
+        <h2 className="font-display text-lg font-semibold mb-2">Delete "{rule.name}"?</h2>
+        <p className="text-[13px] mb-5" style={{ color: "var(--ink-soft)" }}>
+          This cannot be undone. Invoices already flagged by this rule keep their saved warning text — deleting the rule does not change past invoices.
+        </p>
+        {serverError && (
+          <p className="text-[13px] mb-4 px-3 py-2 rounded-md" style={{ background: "var(--danger-soft)", color: "var(--danger)" }}>{serverError}</p>
+        )}
+        <div className="flex items-center justify-end gap-2">
+          <button onClick={onCancel} className="text-[13px] font-medium px-4 py-2 rounded-md" style={{ color: "var(--ink-soft)" }}>Cancel</button>
+          <button onClick={onConfirm} className="text-[13px] font-semibold px-4 py-2 rounded-md text-white" style={{ background: "var(--danger)" }}>Delete rule</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RuleRow({ rule, onEdit, onDelete, onToggleActive }) {
+  return (
+    <div className="stub rise px-5 pt-4 pb-4 flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <h3 className="font-display font-semibold text-[15px] truncate">{rule.name}</h3>
+            <Stamp active={rule.active} />
+          </div>
+          {rule.description && (
+            <p className="text-[12.5px] mt-1" style={{ color: "var(--ink-soft)" }}>{rule.description}</p>
+          )}
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <button onClick={() => onEdit(rule)} className="text-[12.5px] font-medium px-2.5 py-1.5 rounded-md hover:bg-black/[0.03]" style={{ color: "var(--brand)" }}>Edit</button>
+          <button onClick={() => onToggleActive(rule)} className="text-[12.5px] font-medium px-2.5 py-1.5 rounded-md hover:bg-black/[0.03]" style={{ color: "var(--ink-soft)" }}>
+            {rule.active ? "Deactivate" : "Activate"}
+          </button>
+          <button onClick={() => onDelete(rule)} className="text-[12.5px] font-medium px-2.5 py-1.5 rounded-md hover:bg-black/[0.03]" style={{ color: "var(--danger)" }}>Delete</button>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 pt-2 flex-wrap">
+        <MatchTypeBadge type={rule.matchType} />
+        {(rule.matchValues ?? []).map((v) => (
+          <span key={v} className="font-mono text-[13px] px-2 py-0.5 rounded" style={{ background: "var(--paper)", border: "1px solid var(--line)" }}>
+            {rule.matchType === "NCM_PREFIX" ? `starts with "${v}"` : `contains "${v}"`}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({ onCreate }) {
+  return (
+    <div className="stub no-perf rise flex flex-col items-center text-center px-8 py-14">
+      <div className="scanline w-24 mb-5" />
+      <h3 className="font-display text-lg font-semibold mb-1.5">No product rules yet</h3>
+      <p className="text-[13px] max-w-[320px] mb-5" style={{ color: "var(--ink-soft)" }}>
+        Rules block specific purchases from reimbursement — by product NCM code or keyword in the product name.
+      </p>
+      <button onClick={onCreate} className="text-[13px] font-semibold px-4 py-2 rounded-md text-white" style={{ background: "var(--brand)" }}>+ Create your first rule</button>
+    </div>
+  );
+}
+
+function App() {
+  const [rules, setRules] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [connectionError, setConnectionError] = useState(false);
+  const [actionError, setActionError] = useState(""); // review fix: mutations were silently treated as success before
+  const [modal, setModal] = useState(null); // {type: 'create'|'edit', rule?}
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [filter, setFilter] = useState("all"); // all | active | inactive
+
+  async function loadRules() {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/product-rules`, {
+        headers: { "x-company-id": COMPANY_ID },
+      });
+      if (!res.ok) throw new Error("request failed");
+      const body = await res.json();
+      setRules(body.data);
+      setConnectionError(false);
+    } catch (err) {
+      setConnectionError(true);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  React.useEffect(() => {
+    loadRules();
+  }, []);
+
+  const visible = useMemo(() => {
+    if (filter === "all") return rules;
+    return rules.filter((r) => (filter === "active" ? r.active : !r.active));
+  }, [rules, filter]);
+
+  async function extractErrorMessage(res) {
+    try {
+      const body = await res.json();
+      return body?.error?.message || `Request failed (${res.status})`;
+    } catch {
+      return `Request failed (${res.status})`;
+    }
+  }
+
+  async function handleSave(input) {
+    setActionError("");
+    const isEdit = Boolean(input.id);
+    const url = isEdit
+      ? `${API_BASE}/api/admin/product-rules/${input.id}`
+      : `${API_BASE}/api/admin/product-rules`;
+    const res = await fetch(url, {
+      method: isEdit ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json", "x-company-id": COMPANY_ID },
+      body: JSON.stringify({
+        name: input.name,
+        matchType: input.matchType,
+        matchValues: input.matchValues,
+        description: input.description,
+        active: input.active,
+      }),
+    });
+    if (!res.ok) {
+      // Review fix: previously this closed the modal and refreshed
+      // regardless of the response, so a failed save silently looked
+      // like a success. Now the modal stays open and the reason shows.
+      setActionError(await extractErrorMessage(res));
+      return;
+    }
+    setModal(null);
+    await loadRules(); // re-fetch from the server — this list is never held as local truth
+  }
+
+  async function handleToggleActive(rule) {
+    setActionError("");
+    const res = await fetch(`${API_BASE}/api/admin/product-rules/${rule.id}/${rule.active ? "deactivate" : "activate"}`, {
+      method: "POST",
+      headers: { "x-company-id": COMPANY_ID },
+    });
+    if (!res.ok) {
+      setActionError(await extractErrorMessage(res));
+      return;
+    }
+    await loadRules();
+  }
+
+  async function handleDelete() {
+    setActionError("");
+    const res = await fetch(`${API_BASE}/api/admin/product-rules/${pendingDelete.id}`, {
+      method: "DELETE",
+      headers: { "x-company-id": COMPANY_ID },
+    });
+    if (!res.ok) {
+      setActionError(await extractErrorMessage(res));
+      return;
+    }
+    setPendingDelete(null);
+    await loadRules();
+  }
+
+  return (
+    <div className="min-h-screen">
+      <div className="max-w-[760px] mx-auto px-6 pt-12 pb-24">
+
+        <div className="flex items-start justify-between mb-1">
+          <div>
+            <p className="text-[11px] font-mono uppercase tracking-widest mb-2" style={{ color: "var(--ink-soft)" }}>
+              {COMPANY_ID} · Admin
+            </p>
+            <h1 className="font-display text-[28px] font-semibold" style={{ color: "var(--ink)" }}>Product rules</h1>
+            <p className="text-[13.5px] mt-1.5 max-w-[480px]" style={{ color: "var(--ink-soft)" }}>
+              Every scanned invoice is checked against these rules. Matching items are flagged and excluded from reimbursement.
+            </p>
+          </div>
+          <button
+            onClick={() => setModal({ type: "create" })}
+            className="shrink-0 text-[13px] font-semibold px-4 py-2.5 rounded-md text-white"
+            style={{ background: "var(--brand)" }}
+          >
+            + New rule
+          </button>
+        </div>
+
+        <div className="flex items-center gap-1 mt-8 mb-4">
+          {["all", "active", "inactive"].map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className="text-[12.5px] font-medium px-3 py-1.5 rounded-full capitalize"
+              style={{
+                color: filter === f ? "var(--brand)" : "var(--ink-soft)",
+                background: filter === f ? "var(--brand-soft)" : "transparent",
+              }}
+            >
+              {f}
+            </button>
+          ))}
+          <span className="text-[12px] ml-auto" style={{ color: "var(--ink-soft)" }}>
+            {visible.length} rule{visible.length !== 1 ? "s" : ""}
+          </span>
+        </div>
+
+        {connectionError && (
+          <div className="rise mb-4 rounded-lg px-4 py-3 text-[13px]" style={{ background: "var(--danger-soft)", color: "var(--danger)" }}>
+            Can't reach the API at {API_BASE}. Run <span className="font-mono">npm run dev</span> in the project folder, then reload this page.
+          </div>
+        )}
+
+        {actionError && !connectionError && (
+          <div className="rise mb-4 rounded-lg px-4 py-3 text-[13px]" style={{ background: "var(--danger-soft)", color: "var(--danger)" }}>
+            {actionError}
+          </div>
+        )}
+
+        <div className="flex flex-col gap-3">
+          {loading ? (
+            <p className="text-[13px] text-center py-10" style={{ color: "var(--ink-soft)" }}>Loading rules…</p>
+          ) : visible.length === 0 && !connectionError ? (
+            <EmptyState onCreate={() => setModal({ type: "create" })} />
+          ) : (
+            visible.map((rule) => (
+              <RuleRow
+                key={rule.id}
+                rule={rule}
+                onEdit={(r) => setModal({ type: "edit", rule: r })}
+                onDelete={(r) => setPendingDelete(r)}
+                onToggleActive={handleToggleActive}
+              />
+            ))
+          )}
+        </div>
+
+        <p className="text-[11.5px] text-center mt-10" style={{ color: "var(--ink-soft)" }}>
+          Only rules for {COMPANY_ID} are shown or editable here — company scoping is enforced by the API (x-company-id header), not just hidden in this screen.
+        </p>
+      </div>
+
+      {modal && (
+        <RuleForm
+          initial={modal.type === "edit" ? modal.rule : null}
+          onCancel={() => setModal(null)}
+          onSave={handleSave}
+          serverError={actionError}
+        />
+      )}
+      {pendingDelete && (
+        <ConfirmDelete rule={pendingDelete} onCancel={() => setPendingDelete(null)} onConfirm={handleDelete} serverError={actionError} />
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
